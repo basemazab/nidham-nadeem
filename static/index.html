@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>نديم — ندحم HR</title>
+<title>نِظام Assistant | منصة نِظام HR</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; font-family:'Tajawal',sans-serif; }
@@ -32,11 +32,11 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">نديم <b>| ندحم HR</b></div>
-    <div class="sub">المندوب الذكي — اتكلم معاه صوت بصوت 👇</div>
+    <div class="logo">نِظام <b>Assistant</b></div>
+    <div class="sub">المساعد الذكي لمنصة نِظام HR — اتكلم معاه صوت بصوت 👇</div>
   </header>
   <div id="chat">
-    <div class="msg bot">أهلاً بيك! 🌟 أنا نديم من ندحم HR.<br>دوس على الزر واسألني أي حاجة عن النظام — الرواتب، التأمينات، البصمة، الإجازات… وأحجزلك ديمو مجاني.</div>
+    <div class="msg bot">أهلاً بيك في نِظام! 🌟 أنا نِظام Assistant، المساعد الذكي بتاع المنصة.<br>اسألني عن المرتبات، التأمينات، الحضور والبصمة… وأحجزلك ديمو مجاني.</div>
   </div>
   <div class="controls">
     <button id="micBtn" title="اضغط واتكلم">🎙️</button>
@@ -73,7 +73,7 @@ async function send(blob) {
     if (data.error) { status.textContent = data.error; return; }
     addMsg(data.client_text, 'user');
     addMsg(data.reply, 'bot');
-    status.textContent = '🔊 نديم بيتكلم...';
+    status.textContent = '🔊 نِظام Assistant بيتكلم...';
 
     const bin = atob(data.audio);
     const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
