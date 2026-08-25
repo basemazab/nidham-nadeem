@@ -8,38 +8,54 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; font-family:'Tajawal',sans-serif; }
   body { min-height:100vh; background:linear-gradient(160deg,#0f2027,#203a43,#2c5364); display:flex; justify-content:center; padding:20px; }
-  .wrap { width:100%; max-width:480px; display:flex; flex-direction:column; height:calc(100vh - 40px); }
+  .wrap { width:100%; max-width:480px; display:flex; flex-direction:column; height:calc(100vh - 40px); position:relative; }
   header { text-align:center; color:#fff; padding:18px 0 10px; }
   .logo { font-size:26px; font-weight:800; letter-spacing:.5px; }
   .logo b { color:#4fd1c5; }
   .sub { color:rgba(255,255,255,.65); font-size:14px; margin-top:2px; }
   #chat { flex:1; overflow-y:auto; padding:16px 4px; display:flex; flex-direction:column; gap:10px; }
-  .msg { max-width:82%; padding:11px 15px; border-radius:18px; line-height:1.7; font-size:15.5px; animation:pop .25s ease; }
+  .msg { max-width:82%; padding:11px 15px; border-radius:18px; line-height:1.7; font-size:15.5px; animation:pop .25s ease; white-space:pre-wrap; }
   @keyframes pop { from{transform:scale(.95);opacity:0} to{transform:scale(1);opacity:1} }
   .bot { align-self:flex-start; background:#fff; color:#1a2b33; border-bottom-right-radius:6px; }
   .user { align-self:flex-end; background:#4fd1c5; color:#08302c; border-bottom-left-radius:6px; font-weight:500; }
-  .sys { align-self:center; color:rgba(255,255,255,.55); font-size:13px; }
   .controls { padding:14px 0 8px; display:flex; flex-direction:column; align-items:center; gap:12px; }
   #micBtn { width:88px; height:88px; border-radius:50%; border:none; cursor:pointer;
     background:linear-gradient(145deg,#4fd1c5,#38b2ac); color:#fff; font-size:38px;
-    box-shadow:0 8px 24px rgba(79,209,197,.45); transition:transform .15s, box-shadow .3s; }
+    box-shadow:0 8px 24px rgba(79,209,197,.45); transition:transform .15s; }
   #micBtn:hover { transform:scale(1.05); }
   #micBtn.rec { background:linear-gradient(145deg,#fc8181,#e53e3e); animation:pulse 1.1s infinite; }
   @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(229,62,62,.55)} 70%{box-shadow:0 0 0 24px rgba(229,62,62,0)} 100%{box-shadow:0 0 0 0 rgba(229,62,62,0)} }
-  #status { color:rgba(255,255,255,.75); font-size:14.5px; height:20px; }
+  #micBtn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+  #status { color:rgba(255,255,255,.75); font-size:14.5px; height:20px; text-align:center; }
+  .dots span { display:inline-block; width:7px; height:7px; margin:0 2px; background:#4fd1c5; border-radius:50%; animation:bounce 1.2s infinite; }
+  .dots span:nth-child(2){animation-delay:.15s} .dots span:nth-child(3){animation-delay:.3s}
+  @keyframes bounce { 0%,60%,100%{transform:translateY(0);opacity:.5} 30%{transform:translateY(-6px);opacity:1} }
+  #gate { position:absolute; inset:0; z-index:50; background:linear-gradient(160deg,#0f2027,#2c5364);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:22px; text-align:center; padding:24px; border-radius:14px; }
+  #gate h1 { color:#fff; font-size:26px; font-weight:800; }
+  #gate h1 b { color:#4fd1c5; }
+  #gate p { color:rgba(255,255,255,.7); font-size:15px; line-height:1.8; max-width:320px; }
+  #startBtn { background:linear-gradient(145deg,#4fd1c5,#38b2ac); color:#fff; border:none; cursor:pointer;
+    font-size:19px; font-weight:700; padding:16px 42px; border-radius:40px; box-shadow:0 10px 28px rgba(79,209,197,.5);
+    transition:transform .15s; font-family:'Tajawal'; }
+  #startBtn:hover { transform:scale(1.06); }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div id="gate">
+    <h1>مساعد <b>نِظام</b> الذكي</h1>
+    <p>اتكلم معاه صوت بصوت زي إنك بتكلم موظف مبيعات حقيقي — يسألك، يجاوبك، ويحجزلك ديمو مجاني.</p>
+    <button id="startBtn">🎙️ ابدأ الكلام</button>
+  </div>
+
   <header>
     <div class="logo">نِظام <b>Assistant</b></div>
     <div class="sub">المساعد الذكي لمنصة نِظام HR — اتكلم معاه صوت بصوت 👇</div>
   </header>
-  <div id="chat">
-    <div class="msg bot">أهلاً بيك في نِظام! 🌟 أنا نِظام Assistant، المساعد الذكي بتاع المنصة.<br>اسألني عن المرتبات، التأمينات، الحضور والبصمة… وأحجزلك ديمو مجاني.</div>
-  </div>
+  <div id="chat"></div>
   <div class="controls">
-    <button id="micBtn" title="اضغط واتكلم">🎙️</button>
+    <button id="micBtn" title="اضغط واتكلم" disabled>🎙️</button>
     <div id="status">دوس على المايك وابدأ تتكلم</div>
   </div>
 </div>
@@ -47,11 +63,12 @@
 const chat = document.getElementById('chat');
 const micBtn = document.getElementById('micBtn');
 const status = document.getElementById('status');
+const gate = document.getElementById('gate');
 let sid = localStorage.getItem('nadeem_sid');
 if (!sid) { sid = crypto.randomUUID(); localStorage.setItem('nadeem_sid', sid); }
 const urlK = new URLSearchParams(location.search).get('k') || '';
 
-let mediaRecorder = null, chunks = [], recording = false;
+let mediaRecorder = null, chunks = [], recording = false, busy = false;
 
 function addMsg(text, cls) {
   const d = document.createElement('div');
@@ -59,61 +76,162 @@ function addMsg(text, cls) {
   d.textContent = text;
   chat.appendChild(d);
   chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+function thinking() {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  d.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>';
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+  return d;
 }
 
+const audioQueue = [];
+let playing = false;
+function pump() {
+  if (playing || !audioQueue.length) {
+    if (!playing && !audioQueue.length && queueDone) setStatus('دوس على المايك وابدأ تتكلم');
+    return;
+  }
+  playing = true;
+  const item = audioQueue.shift();
+  const player = new Audio(URL.createObjectURL(new Blob([item.bytes], { type: item.mime })));
+  const fin = () => { playing = false; pump(); };
+  player.onended = fin;
+  player.onerror = fin;
+  player.play().catch(fin);
+}
+let queueDone = true;
+function setStatus(t) { status.textContent = t; }
+
+async function playWelcome() {
+  try {
+    await new Audio('/static/welcome.wav').play();
+  } catch (e) {}
+}
+
+document.getElementById('startBtn').onclick = async () => {
+  gate.remove();
+  micBtn.disabled = false;
+  setStatus('بسمع الترحيب...');
+  await playWelcome();
+  setStatus('دوس على المايك وابدأ تتكلم');
+};
+
 async function send(blob) {
-  status.textContent = 'بفهمك...';
+  if (busy) return;
+  busy = true;
+  setStatus('بفهمك...');
+  let t = thinking();
+
   const fd = new FormData();
   fd.append('file', blob, 'speech.webm');
   fd.append('session_id', sid);
   fd.append('k', urlK);
-  try {
-    const res = await fetch('/api/talk', { method:'POST', body: fd });
-    const data = await res.json();
-    if (data.error) { status.textContent = data.error; return; }
-    addMsg(data.client_text, 'user');
-    addMsg(data.reply, 'bot');
-    status.textContent = '🔊 نِظام Assistant بيتكلم...';
 
-    const bin = atob(data.audio);
-    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: data.mime || 'audio/mpeg' }));
-    const player = new Audio(url);
-    player.onended = () => status.textContent = 'دوس على المايك وابدأ تتكلم';
-    await player.play();
+  audioQueue.length = 0;
+  playing = false;
+  queueDone = false;
+
+  let botBubble = null, botText = '';
+  let sawError = false;
+
+  try {
+    const res = await fetch('/api/talk', { method: 'POST', body: fd });
+    if (!res.ok || !(res.body)) {
+      const j = await res.json().catch(() => ({ error: 'حصلت مشكلة' }));
+      throw new Error(j.error || 'حصلت مشكلة');
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const blocks = buf.split('\n\n');
+      buf = blocks.pop();
+      for (const block of blocks) {
+        let ev = null, data = null;
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event: ')) ev = line.slice(7).trim();
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (!ev || data == null) continue;
+        const d = JSON.parse(data);
+
+        if (ev === 'transcript') {
+          t.remove(); t = null;
+          addMsg(d.text, 'user');
+          t = thinking();
+        } else if (ev === 'text') {
+          if (!botBubble) {
+            if (t) { t.remove(); t = null; }
+            botBubble = addMsg('', 'bot');
+            botText = '';
+            setStatus('🔊 نِظام Assistant بيتكلم...');
+          }
+          const piece = d.t;
+          botText += (botText && !/\s$/.test(botText) ? ' ' : '') + piece;
+          botBubble.textContent = botText;
+        } else if (ev === 'chunk') {
+          audioQueue.push({
+            bytes: Uint8Array.from(atob(d.audio), c => c.charCodeAt(0)),
+            mime: d.mime,
+          });
+          pump();
+        } else if (ev === 'error') {
+          sawError = true;
+          if (t) { t.remove(); t = null; }
+          setStatus('⚠️ ' + d.message);
+        } else if (ev === 'done') {
+          queueDone = true;
+        }
+      }
+    }
   } catch (e) {
-    status.textContent = 'حصلت مشكلة — جرب تاني';
+    sawError = true;
+    setStatus('⚠️ ' + (e.message || 'حصلت مشكلة — جرب تاني'));
   }
+
+  queueDone = true;
+  if (t) { t.remove(); t = null; }
+  if (!audioQueue.length && !playing && !sawError) setStatus('دوس على المايك وابدأ تتكلم');
+  busy = false;
 }
 
 async function toggle() {
+  if (busy) { setStatus('استنى رد نِظام Assistant الأول'); return; }
   if (!recording) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       });
       chunks = [];
       mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = e => chunks.push(e.data);
       mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(chunks, { type:'audio/webm' });
-        if (blob.size > 2000) send(blob); else status.textContent = 'التسجيل كان قصير — جرب تاني';
+        stream.getTracks().forEach(tr => tr.stop());
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        if (blob.size > 2000) send(blob);
+        else setStatus('التسجيل كان قصير — جرب تاني');
       };
       mediaRecorder.start();
       recording = true;
       micBtn.classList.add('rec');
       micBtn.textContent = '⏹️';
-      status.textContent = '🔴 بيسمعك... دوس تاني لما تخلص';
+      setStatus('🔴 بيسمعك... دوس تاني لما تخلص');
     } catch (e) {
-      status.textContent = 'اسمح بالوصول للمايك من إعدادات المتصفح';
+      setStatus('اسمح بالوصول للمايك من إعدادات المتصفح');
     }
   } else {
     mediaRecorder.stop();
     recording = false;
     micBtn.classList.remove('rec');
     micBtn.textContent = '🎙️';
-    status.textContent = 'ببعت كلامك...';
+    setStatus('ببعت كلامك...');
   }
 }
 
