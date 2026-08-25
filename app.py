@@ -12,7 +12,8 @@ import requests
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
@@ -50,24 +51,27 @@ SYSTEM_PROMPT = """انت "نِظام Assistant" — المساعد الصوتي
 - اسم المنتج بينطق "نِظام" بالكسر.
 
 معلومات Nidham:
-- نظام HR + Payroll + AI كامل مبني خصيصًا للسوق المصري، مش نسخة معرّبة.
-- مرتبات بقانون 2026 (القسمة على 26، تأمينات 11%، شرايح ضريبية جديدة).
+- نظام HR + Payroll + CRM + AI كامل مبني خصيصًا للسوق المصري، مش نسخة معرّبة.
+- مرتبات بقانون العمل الجديد 14/2025 (القسمة على 26) وتأمينات قانون 148/2019 وشرايح ضريبية 2026.
 - نماذج التأمينات الرسمية (نموذج 1، 2، 6) بنقرة واحدة.
-- تطبيق موبايل للموظفين + حضور بـ GPS + ربط ZKTeco.
-- AI Agent بيفهم أوامر بالعربي، Marketing Studio، تقييم أداء وKPIs، أصول وهيكلة شركة.
-- أمان: 2FA + تشفير البيانات الشخصية + سجل تدقيق غير قابل للتعديل.
+- تطبيق موبايل للموظفين + حضور GPS + ربط ZKTeco لحظي بالسحاب (بروتوكول ADMS).
+- AI Agent بينفذ طلبات HR بالكلام العربي، AI CV Screening، Marketing Studio للإعلانات.
+- تقييم أداء وKPIs، إدارة أصول، Org Chart، تقويم فرق، Bridge Analytics (CRM + HR مع بعض).
+- أمان: 2FA مجاني + تشفير البيانات الحساسة + audit log بسلسلة SHA-256 + باك أب يومي.
 - عملاؤنا: مجموعة الاتحاد للإنشاءات المعدنية (200+ موظف)، والمصرية الألمانية للأبواب WPC.
-- موقعنا: nidhamhr.com — ومقرنا دمياط، مصر.
+- موقعنا nidhamhr.com ومقرنا دمياط، مصر. الدعم كله عربي مصري.
 
-الأسعار (احفظها بدقة):
-- مجاني: صفر جنيه — حتى 5 موظفين.
-- Starter: 500 جنيه شهريًا — حتى 25 موظف.
-- Pro (الأكثر شعبية): 1,500 جنيه شهريًا — حتى 100 موظف.
-- Business: 3,500 جنيه شهريًا — حتى 500 موظف.
-- Enterprise: تسعير خاص — حولها لباسم.
-- عرض Beta لأول 10 شركات: تلات شهور مجانًا + نص خصم على السنة كلها بعدها.
+الأسعار الرسمية (احفظها بدقة مطلقة):
+- المجانية: صفر جنيه للأبد — لحد 5 موظفين (موظفين وحضور وإجازات وتطبيق، من غير مرتبات).
+- Starter: 750 جنيه شهريًا — لحد 25 موظف (مرتبات وتأمينات وضرائب ونماذج رسمية وشهادات).
+- Pro وهي الأكثر شعبية: 2,500 جنيه شهريًا — لحد 100 موظف (كل حاجة + الـ AI Agent والـ CV Screening والـ Marketing Studio).
+- Business: 6,000 جنيه شهريًا — لحد 500 موظف (workflows وتقارير متقدمة ودعم أولوية وSLA).
+- Enterprise لـ 500+: عرض مخصص — حولها لباسم.
+- الدفع السنوي = شهرين هدية. وضمان استرداد كامل 30 يوم لأول دفعة. والأسعار من غير ضريبة القيمة المضافة.
+- برنامج Beta لأول 10 شركات: 3 شهور مجانًا + خصم نص القيمة على أول سنة على أي باقة.
+- عرض العملاء المؤسسين: شهرين تجربة كاملة بدل 14 يوم + نقل بيانات الموظفين علينا ببلاش + تجميد السعر سنتين.
 
-لو العميل قال "غالي": اشرح الـROI — تكلفة المحاسب الخارجي لوحدها 10 آلاف جنيه وأكتر شهريًا، نِظام Pro بألف وخمسمئة بس ويغطي أكتر. توفير يقارب 14,750 جنيه شهريًا لشركة 100 موظف.
+لو العميل قال "غالي": اشرح الـROI — محاسب خارجي لوحده بياخد 10 آلاف جنيه وأكتر شهريًا، ونِظام Pro بـ2,500 بس ويغطي المرتبات والتأمينات والـAI كله. ومقارنة مشهورة: Bayzat لشركة 100 موظف فوق 10 آلاف جنيه، وزنHR حوالي 8 آلاف، واحنا بنفس الحجم 2,500 بس وبنماذج تأمينات مصرية هم ماعندهاش.
 
 قواعد صارمة:
 1. متكدبش أبدًا — ميزة مش موجودة؟ "دلوقتي مش متاحة، بس في الـ roadmap."
@@ -85,6 +89,11 @@ SYSTEM_PROMPT = """انت "نِظام Assistant" — المساعد الصوتي
 sessions = {}
 
 app = FastAPI(title="Nidham Assistant Voice")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+def sse(ev, obj):
+    return f"event: {ev}\ndata: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 
 def transcribe(audio_bytes):
@@ -248,77 +257,86 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
     if len(audio) < 1000:
         return JSONResponse({"error": "التسجيل قصير جدًا"}, status_code=400)
 
-    try:
-        user_text = await asyncio.to_thread(transcribe, audio)
-    except Exception as e:
-        return JSONResponse({"error": f"مشكلة في السمع: {e}"}, status_code=500)
+    async def event_stream():
+        try:
+            user_text = await asyncio.to_thread(transcribe, audio)
+        except Exception as e:
+            yield sse("error", {"message": f"مشكلة في السمع: {e}"})
+            return
+        if not user_text:
+            yield sse("error", {"message": "معرفتش أسمعك، كرر تاني"})
+            return
+        yield sse("transcript", {"text": user_text})
 
-    if not user_text:
-        return JSONResponse({"error": "معرفتش أسمعك، كرر تاني"}, status_code=200)
+        history = sessions.setdefault(session_id, [])
+        history.append({"role": "user", "content": user_text})
 
-    history = sessions.setdefault(session_id, [])
-    history.append({"role": "user", "content": user_text})
+        tts_tasks = []
+        full_reply = ""
+        buf = ""
 
-    tts_tasks = []
-    full_reply = ""
-    buf = ""
+        def flush_sentence(s):
+            s = s.strip()
+            if s:
+                tts_tasks.append(asyncio.create_task(tts_one(s)))
 
-    def flush_sentence(s):
-        s = s.strip()
-        if s:
-            tts_tasks.append(asyncio.create_task(tts_one(s)))
+        try:
+            gen = ask_groq_stream_tokens(history)
+            while True:
+                tok = await asyncio.to_thread(next, gen, None)
+                if tok is None:
+                    break
+                full_reply += tok
+                buf += tok
+                parts = re.split(r"(?<=[.!؟?\n])\s+", buf)
+                if len(parts) > 1:
+                    buf = parts[-1]
+                    for s in parts[:-1]:
+                        flush_sentence(s)
+                        yield sse("text", {"t": s})
+            tail = buf.strip()
+            if tail:
+                flush_sentence(buf)
+                yield sse("text", {"t": tail})
+        except Exception as e:
+            history.pop()
+            yield sse("error", {"message": f"مشكلة في التفكير: {e}"})
+            return
 
-    try:
-        gen = ask_groq_stream_tokens(history)
-        while True:
-            tok = await asyncio.to_thread(next, gen, None)
-            if tok is None:
-                break
-            full_reply += tok
-            buf += tok
-            parts = re.split(r"(?<=[.!؟?\n])\s+", buf)
-            if len(parts) > 1:
-                buf = parts[-1]
-                for s in parts[:-1]:
-                    flush_sentence(s)
-        flush_sentence(buf)
-    except Exception as e:
-        history.pop()
-        return JSONResponse({"error": f"مشكلة في التفكير: {e}"}, status_code=500)
+        if not full_reply.strip():
+            history.pop()
+            yield sse("error", {"message": "مفيش رد، جرب تاني"})
+            return
 
-    if not full_reply.strip():
-        history.pop()
-        return JSONResponse({"error": "مفيش رد، جرب تاني"}, status_code=500)
+        history.append({"role": "assistant", "content": full_reply})
 
-    history.append({"role": "assistant", "content": full_reply})
+        first_at = None
+        for i, task in enumerate(tts_tasks):
+            try:
+                fmt, data = await task
+            except Exception as e:
+                yield sse("error", {"message": f"مشكلة في الصوت: {e}"})
+                return
+            mime = "audio/wav" if fmt in ("wav", "pcm") else "audio/mpeg"
+            if first_at is None:
+                first_at = time.time() - t0
+            yield sse(
+                "chunk",
+                {
+                    "i": i,
+                    "audio": base64.b64encode(data).decode(),
+                    "mime": mime,
+                    "final": i == len(tts_tasks) - 1,
+                },
+            )
 
-    try:
-        results = await asyncio.gather(*tts_tasks)
-    except Exception as e:
-        return JSONResponse({"error": f"مشكلة في الصوت: {e}"}, status_code=500)
+        total = time.time() - t0
+        print(
+            f"[توقيت] أول صوت={first_at:.1f}s | رد كامل={total:.1f}s | جمل={len(tts_tasks)}"
+        )
+        yield sse("done", {})
 
-    fmt = results[0][0] if results else "mp3"
-    payload = b"".join(r[1] for r in results)
-
-    if fmt == "pcm":
-        final_audio = pcm_to_wav(payload)
-        mime = "audio/wav"
-    elif fmt == "wav":
-        final_audio = payload
-        mime = "audio/wav"
-    else:
-        final_audio = payload
-        mime = "audio/mpeg"
-
-    total = time.time() - t0
-    print(f"[توقيت] رد كامل={total:.1f}s | جمل={len(results)} | صوت={len(final_audio)} بايت")
-
-    return {
-        "client_text": user_text,
-        "reply": full_reply,
-        "audio": base64.b64encode(final_audio).decode(),
-        "mime": mime,
-    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":
