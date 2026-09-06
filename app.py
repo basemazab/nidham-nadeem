@@ -39,6 +39,14 @@ HAKIM_FORMAT = os.getenv("HAKIM_FORMAT", "wav")
 ACCESS_KEY = os.getenv("ACCESS_KEY", "")
 DEMO_ACCOUNTS_FILE = os.getenv("DEMO_ACCOUNTS_FILE", "demo_accounts.json")
 
+# --- Lead capture: بعد كل رد بنستخرج بيانات العميل ونبعتها لباسم ---
+LEAD_CAPTURE = os.getenv("LEAD_CAPTURE", "1") not in ("0", "false", "no")
+LEAD_EXTRACT_MODEL = os.getenv("LEAD_EXTRACT_MODEL", GROQ_MODEL)
+LEAD_WEBHOOK_URL = os.getenv("LEAD_WEBHOOK_URL", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+LEADS_FILE = os.getenv("LEADS_FILE", "leads.jsonl")
+
 SYSTEM_PROMPT = """انت "نِظام Assistant" — المساعد الصوتي الذكي الرسمي لشركة Nidham (نِظام)، وهي SaaS مصري متخصص في إدارة الموارد البشرية والمرتبات والـ AI للشركات المصرية الصغيرة والمتوسطة (10-200 موظف).
 
 هويتك ودورك:
@@ -356,6 +364,163 @@ def pcm_to_wav(pcm, rate=24000):
     return buf.getvalue()
 
 
+LEAD_FIELDS = ("name", "company", "employees", "phone", "current_system", "demo_time", "notes")
+
+LEAD_EXTRACT_PROMPT = """انت محلل بيانات. هتقرأ محادثة بين مساعد مبيعات صوتي وعميل محتمل، وتستخرج بيانات العميل فقط (مش بيانات المساعد ولا باسم).
+رجّع JSON object فيه المفاتيح دي بالظبط، وأي حاجة مش مذكورة خليها null:
+{"name": "اسم العميل", "company": "اسم الشركة", "employees": عدد الموظفين كرقم صحيح, "phone": "رقم الموبايل كأرقام إنجليزية فقط بدون مسافات", "current_system": "النظام اللي بيستخدمه حاليًا", "demo_time": "ميعاد الديمو المتفق عليه كما قاله العميل", "notes": "أي ملاحظة مهمة لباسم في جملة واحدة"}
+قواعد:
+- الأرقام المنطوقة بالكلام ("صفر واحد صفر ...") حوّلها لأرقام: 010...
+- متخترعش بيانات. لو العميل مقالش رقم، phone = null.
+- لو الاسم اتقال بس مش مؤكد انه اسم عميل، سيبه null.
+- رجّع JSON فقط بدون أي كلام."""
+
+sessions_leads = {}
+_leads_lock = asyncio.Lock()
+
+_AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
+def normalize_phone(v):
+    if not v:
+        return None
+    digits = re.sub(r"\D", "", str(v).translate(_AR_DIGITS))
+    if digits.startswith("0020"):
+        digits = "0" + digits[4:]
+    elif digits.startswith("20") and len(digits) == 12:
+        digits = "0" + digits[2:]
+    if len(digits) < 8:
+        return None
+    return digits
+
+
+def clean_lead(raw):
+    out = {}
+    for f in LEAD_FIELDS:
+        v = raw.get(f) if isinstance(raw, dict) else None
+        if v in (None, "", "null", "غير معروف", "غير مذكور"):
+            continue
+        if f == "phone":
+            v = normalize_phone(v)
+            if not v:
+                continue
+        elif f == "employees":
+            m = re.search(r"\d+", str(v).translate(_AR_DIGITS))
+            if not m:
+                continue
+            v = int(m.group())
+        else:
+            v = str(v).strip()
+            if not v:
+                continue
+        out[f] = v
+    return out
+
+
+def extract_lead_sync(history):
+    convo = "\n".join(
+        ("العميل: " if m["role"] == "user" else "المساعد: ") + m["content"] for m in history[-12:]
+    )
+    r = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+        json={
+            "model": LEAD_EXTRACT_MODEL,
+            "messages": [
+                {"role": "system", "content": LEAD_EXTRACT_PROMPT},
+                {"role": "user", "content": convo},
+            ],
+            "temperature": 0,
+            "max_tokens": 300,
+            "response_format": {"type": "json_object"},
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    content = r.json()["choices"][0]["message"]["content"]
+    return clean_lead(json.loads(content))
+
+
+def lead_is_ready(lead):
+    return bool(lead.get("phone")) and bool(lead.get("name") or lead.get("company"))
+
+
+def format_lead_message(lead, session_id, update=False):
+    title = "🔄 تحديث على Lead" if update else "🔥 Lead جديد من مساعد نِظام"
+    lines = [
+        title,
+        f"👤 الاسم: {lead.get('name', '—')}",
+        f"🏢 الشركة: {lead.get('company', '—')}",
+        f"👥 عدد الموظفين: {lead.get('employees', '—')}",
+        f"📱 الرقم: {lead.get('phone', '—')}",
+        f"🖥️ النظام الحالي: {lead.get('current_system', '—')}",
+        f"📅 ميعاد الديمو: {lead.get('demo_time', '—')}",
+    ]
+    if lead.get("notes"):
+        lines.append(f"📝 ملاحظات: {lead['notes']}")
+    if lead.get("demo_company"):
+        lines.append(f"🎯 من لينك ديمو: {lead['demo_company']}")
+    lines.append(f"🆔 الجلسة: {session_id[:8]}")
+    return "\n".join(lines)
+
+
+def notify_lead_sync(lead, session_id, update, demo_company=""):
+    if demo_company:
+        lead = {**lead, "demo_company": demo_company}
+    record = {
+        **lead,
+        "session_id": session_id,
+        "update": update,
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        with open(LEADS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[lead] فشل حفظ الملف: {e}")
+
+    text = format_lead_message(lead, session_id, update)
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
+                timeout=15,
+            ).raise_for_status()
+        except Exception as e:
+            print(f"[lead] فشل إرسال Telegram: {e}")
+    if LEAD_WEBHOOK_URL:
+        try:
+            requests.post(LEAD_WEBHOOK_URL, json={**record, "text": text}, timeout=15).raise_for_status()
+        except Exception as e:
+            print(f"[lead] فشل إرسال Webhook: {e}")
+    print(f"[lead] {'تحديث' if update else 'جديد'}: {lead}")
+
+
+async def process_lead(session_id, history, account=None):
+    """بيتشغل في الخلفية بعد كل رد: يستخرج البيانات ويبلّغ باسم لو اكتملت أو اتغيرت."""
+    demo_company = str((account or {}).get("company", "") or "").strip()
+    try:
+        found = await asyncio.to_thread(extract_lead_sync, history)
+    except Exception as e:
+        print(f"[lead] فشل الاستخراج: {e}")
+        return
+    if not found:
+        return
+    async with _leads_lock:
+        state = sessions_leads.setdefault(session_id, {"data": {}, "sent": None})
+        state["data"].update(found)
+        lead = dict(state["data"])
+        if not lead_is_ready(lead):
+            return
+        signature = tuple(lead.get(f) for f in LEAD_FIELDS if f != "notes")
+        if signature == state["sent"]:
+            return
+        update = state["sent"] is not None
+        state["sent"] = signature
+    await asyncio.to_thread(notify_lead_sync, lead, session_id, update, demo_company)
+
+
 @app.get("/")
 async def home():
     return FileResponse("static/index.html")
@@ -453,6 +618,8 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
             return
 
         history.append({"role": "assistant", "content": full_reply})
+        if LEAD_CAPTURE and GROQ_KEY:
+            asyncio.create_task(process_lead(session_id, list(history), account))
 
         first_at = None
         for i, task in enumerate(tts_tasks):
@@ -481,6 +648,24 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
         yield sse("done", {})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/leads")
+async def list_leads(k: str = ""):
+    # بيانات عملاء — كود الأدمن (ACCESS_KEY) بس، مش أكواد الديمو
+    if not ACCESS_KEY or k != ACCESS_KEY:
+        return JSONResponse({"error": "🔒 غير مصرح"}, status_code=403)
+    rows = []
+    if os.path.exists(LEADS_FILE):
+        with open(LEADS_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    return {"count": len(rows), "leads": rows[::-1]}
 
 
 if __name__ == "__main__":
