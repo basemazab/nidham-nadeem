@@ -1,0 +1,33 @@
+{
+  "$comment": "Nidham local harness. NO hooks key on purpose - nothing runs automatically. Everything here is project-scoped.",
+  "permissions": {
+    "deny": [
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(iwr:*)",
+      "Bash(Invoke-WebRequest:*)",
+      "Bash(npx:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(npm publish:*)",
+      "Bash(vercel deploy:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./.claude/memory/secrets*)"
+    ],
+    "ask": [
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(supabase:*)",
+      "Write(./supabase/migrations/**)"
+    ],
+    "allow": [
+      "Bash(npm run test:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ]
+  }
+}
