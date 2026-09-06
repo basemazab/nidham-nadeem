@@ -6,6 +6,8 @@ import os
 import re
 import time
 import wave
+from datetime import date
+from pathlib import Path
 
 import edge_tts
 import requests
@@ -35,6 +37,7 @@ HAKIM_VOICE = os.getenv("HAKIM_VOICE", "yusuf-egyptian")
 HAKIM_SPEED = float(os.getenv("HAKIM_SPEED", "0.9"))
 HAKIM_FORMAT = os.getenv("HAKIM_FORMAT", "wav")
 ACCESS_KEY = os.getenv("ACCESS_KEY", "")
+DEMO_ACCOUNTS_FILE = os.getenv("DEMO_ACCOUNTS_FILE", "demo_accounts.json")
 
 # --- Lead capture: بعد كل رد بنستخرج بيانات العميل ونبعتها لباسم ---
 LEAD_CAPTURE = os.getenv("LEAD_CAPTURE", "1") not in ("0", "false", "no")
@@ -94,6 +97,117 @@ SYSTEM_PROMPT = """انت "نِظام Assistant" — المساعد الصوتي
 هدفك النهائي = حجز Demo. كل مكالمة تنتهي بواحد من: ديمو متحدد بميعاد، أو عميل خد اللينك nidhamhr.com/brochure هيفكر، أو lead كامل (اسم + شركة + عدد موظفين + رقم) لباسم يتابع.
 تفتتح أول ما تسمع سلام: "أهلاً بيك في نِظام! أنا المساعد الذكي بتاعنا. معاك؟" ثم اسأل عن: اسم شركته، عدد الموظفين، والنظام المستخدم حاليًا."""
 
+BAD_KEY_MSG = "🔒 كود الدعوة غير صحيح — اطلب اللينك الكامل من فريق نِظام HR"
+EXPIRED_MSG = "⏳ لينك الديمو ده انتهت صلاحيته — اطلب لينك جديد من فريق نِظام HR"
+
+_demo_cache = {"mtime": None, "accounts": []}
+
+
+def load_demo_accounts():
+    """يقرأ حسابات الديمو من الملف، ويعيد القراءة لوحده لو الملف اتعدّل."""
+    path = Path(DEMO_ACCOUNTS_FILE)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        _demo_cache["mtime"] = None
+        _demo_cache["accounts"] = []
+        return []
+    if _demo_cache["mtime"] != mtime:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            # ملف باظ؟ نكمّل بآخر نسخة سليمة بدل ما نقفل الديمو في وش العميل
+            print(f"[ديمو] مشكلة في قراءة {DEMO_ACCOUNTS_FILE}: {e}")
+            return _demo_cache["accounts"]
+        accounts = data.get("accounts", []) if isinstance(data, dict) else data
+        _demo_cache["mtime"] = mtime
+        _demo_cache["accounts"] = [a for a in accounts if isinstance(a, dict)]
+    return _demo_cache["accounts"]
+
+
+def account_key(acc):
+    """كود الدخول للحساب — يدعم 'env:VAR_NAME' لو الكود متخزن في متغيرات البيئة."""
+    raw = str(acc.get("key", "") or "").strip()
+    if raw.startswith("env:"):
+        return os.getenv(raw[4:], "").strip()
+    return raw
+
+
+def account_expired(acc):
+    raw = str(acc.get("expires_at", "") or "").strip()
+    if not raw:
+        return False
+    try:
+        return date.fromisoformat(raw) < date.today()
+    except ValueError:
+        # تاريخ مكتوب غلط؟ منقفلش الديمو بسببه
+        print(f"[ديمو] تاريخ انتهاء غير مفهوم: {raw!r}")
+        return False
+
+
+def resolve_account(k):
+    k = (k or "").strip()
+    if not k:
+        return None
+    for acc in load_demo_accounts():
+        if not acc.get("active", True):
+            continue
+        key = account_key(acc)
+        if key and key == k:
+            return acc
+    return None
+
+
+def check_access(k):
+    """يرجّع (مسموح, حساب الديمو أو None, رسالة الخطأ)."""
+    k = (k or "").strip()
+    acc = resolve_account(k)
+    if acc:
+        if account_expired(acc):
+            return False, None, EXPIRED_MSG
+        return True, acc, ""
+    if ACCESS_KEY and k != ACCESS_KEY:
+        return False, None, BAD_KEY_MSG
+    return True, None, ""
+
+
+def build_demo_context(acc):
+    """سياق العميل اللي بيتحقن في البرومبت علشان المساعد يكلمهم باسمهم."""
+    if not acc:
+        return ""
+    company = str(acc.get("company", "") or "").strip()
+    contact = str(acc.get("contact", "") or "").strip()
+    industry = str(acc.get("industry", "") or "").strip()
+    notes = str(acc.get("notes", "") or "").strip()
+    employees = acc.get("employees")
+
+    lines = ["", "", "=== سياق الديمو الحالي (مهم جدًا) ==="]
+    if company:
+        lines.append(f'- انت دلوقتي في ديمو مباشر مع شركة "{company}" — رحّب بيهم باسم الشركة من أول رد.')
+    else:
+        lines.append("- انت دلوقتي في ديمو مباشر قدام عميل.")
+    if contact:
+        lines.append(f"- الشخص اللي بتكلمه اسمه {contact} — ناديه باسمه.")
+    if industry:
+        lines.append(f"- مجال شركتهم: {industry} — اربط كلامك باحتياجات المجال ده.")
+    if isinstance(employees, int) and employees > 0:
+        lines.append(
+            f"- عدد موظفينهم {employees} تقريبًا — رشّح الباقة المناسبة للحجم ده على طول ومتسألش عن العدد تاني."
+        )
+    else:
+        lines.append("- عدد موظفينهم لسه مش معروف — اسأل عنه بدري علشان ترشّح الباقة الصح.")
+    if notes:
+        lines.append(f"- ملاحظات من باسم: {notes}")
+    lines.append("- باسم موجود معاهم في الميتنج وبيشرح بنفسه — دورك تسند شرحه وترد على أسئلتهم باختصار.")
+    lines.append("- ممنوع تمامًا تخترع أي معلومة عن شركتهم أو عن حجمهم أو نظامهم الحالي — اسأل بدل ما تفترض.")
+    lines.append("=== نهاية سياق الديمو ===")
+    return "\n".join(lines)
+
+
+def build_system_prompt(acc):
+    return SYSTEM_PROMPT + build_demo_context(acc)
+
+
 sessions = {}
 
 app = FastAPI(title="Nidham Assistant Voice")
@@ -119,8 +233,8 @@ def transcribe(audio_bytes):
     return r.json().get("text", "").strip()
 
 
-def ask_groq_stream_tokens(history):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-20:]
+def ask_groq_stream_tokens(history, system_prompt=None):
+    messages = [{"role": "system", "content": system_prompt or SYSTEM_PROMPT}] + history[-20:]
     r = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
@@ -344,11 +458,15 @@ def format_lead_message(lead, session_id, update=False):
     ]
     if lead.get("notes"):
         lines.append(f"📝 ملاحظات: {lead['notes']}")
+    if lead.get("demo_company"):
+        lines.append(f"🎯 من لينك ديمو: {lead['demo_company']}")
     lines.append(f"🆔 الجلسة: {session_id[:8]}")
     return "\n".join(lines)
 
 
-def notify_lead_sync(lead, session_id, update):
+def notify_lead_sync(lead, session_id, update, demo_company=""):
+    if demo_company:
+        lead = {**lead, "demo_company": demo_company}
     record = {
         **lead,
         "session_id": session_id,
@@ -379,8 +497,9 @@ def notify_lead_sync(lead, session_id, update):
     print(f"[lead] {'تحديث' if update else 'جديد'}: {lead}")
 
 
-async def process_lead(session_id, history):
+async def process_lead(session_id, history, account=None):
     """بيتشغل في الخلفية بعد كل رد: يستخرج البيانات ويبلّغ باسم لو اكتملت أو اتغيرت."""
+    demo_company = str((account or {}).get("company", "") or "").strip()
     try:
         found = await asyncio.to_thread(extract_lead_sync, history)
     except Exception as e:
@@ -399,7 +518,7 @@ async def process_lead(session_id, history):
             return
         update = state["sent"] is not None
         state["sent"] = signature
-    await asyncio.to_thread(notify_lead_sync, lead, session_id, update)
+    await asyncio.to_thread(notify_lead_sync, lead, session_id, update, demo_company)
 
 
 @app.get("/")
@@ -407,10 +526,40 @@ async def home():
     return FileResponse("static/index.html")
 
 
+@app.get("/api/demo")
+async def demo_info(k: str = ""):
+    """الواجهة بتسأل عن الحساب أول ما تفتح — علشان باسم يعرف قبل الميتنج إن اللينك شغال."""
+    ok, acc, err = check_access(k)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err}, status_code=403)
+    if not acc:
+        return {"ok": True, "demo": False}
+    return {
+        "ok": True,
+        "demo": True,
+        "company": str(acc.get("company", "") or ""),
+        "contact": str(acc.get("contact", "") or ""),
+        "employees": acc.get("employees"),
+        "expires_at": str(acc.get("expires_at", "") or ""),
+    }
+
+
+@app.post("/api/reset")
+async def reset_session(session_id: str = Form(...), k: str = Form("")):
+    """يمسح تاريخ المحادثة — علشان الديمو يبدأ نضيف قدام العميل."""
+    ok, _, err = check_access(k)
+    if not ok:
+        return JSONResponse({"error": err}, status_code=403)
+    sessions.pop(session_id, None)
+    return {"ok": True}
+
+
 @app.post("/api/talk")
 async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str = Form("")):
-    if ACCESS_KEY and k != ACCESS_KEY:
-        return JSONResponse({"error": "🔒 كود الدعوة غير صحيح — اطلب اللينك الكامل من فريق نِظام HR"}, status_code=403)
+    allowed, account, err = check_access(k)
+    if not allowed:
+        return JSONResponse({"error": err}, status_code=403)
+    system_prompt = build_system_prompt(account)
 
     t0 = time.time()
     audio = await file.read()
@@ -441,7 +590,7 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
                 tts_tasks.append(asyncio.create_task(tts_one(s)))
 
         try:
-            gen = ask_groq_stream_tokens(history)
+            gen = ask_groq_stream_tokens(history, system_prompt)
             while True:
                 tok = await asyncio.to_thread(next, gen, None)
                 if tok is None:
@@ -470,7 +619,7 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
 
         history.append({"role": "assistant", "content": full_reply})
         if LEAD_CAPTURE and GROQ_KEY:
-            asyncio.create_task(process_lead(session_id, list(history)))
+            asyncio.create_task(process_lead(session_id, list(history), account))
 
         first_at = None
         for i, task in enumerate(tts_tasks):
@@ -503,7 +652,8 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
 
 @app.get("/api/leads")
 async def list_leads(k: str = ""):
-    if ACCESS_KEY and k != ACCESS_KEY:
+    # بيانات عملاء — كود الأدمن (ACCESS_KEY) بس، مش أكواد الديمو
+    if not ACCESS_KEY or k != ACCESS_KEY:
         return JSONResponse({"error": "🔒 غير مصرح"}, status_code=403)
     rows = []
     if os.path.exists(LEADS_FILE):

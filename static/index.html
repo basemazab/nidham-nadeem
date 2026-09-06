@@ -39,24 +39,39 @@
     font-size:19px; font-weight:700; padding:16px 42px; border-radius:40px; box-shadow:0 10px 28px rgba(79,209,197,.5);
     transition:transform .15s; font-family:'Tajawal'; }
   #startBtn:hover { transform:scale(1.06); }
+  .badge { display:inline-block; background:rgba(79,209,197,.14); border:1px solid rgba(79,209,197,.45);
+    color:#4fd1c5; font-size:13.5px; font-weight:700; padding:6px 15px; border-radius:22px; }
+  #gateBadge { font-size:15px; }
+  #headBadge { margin-top:8px; }
+  #gateErr { background:rgba(229,62,62,.14); border:1px solid rgba(229,62,62,.5); color:#feb2b2;
+    padding:14px 18px; border-radius:14px; font-size:15px; line-height:1.75; max-width:330px; }
+  #startBtn:disabled { opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
+  #resetBtn { background:transparent; border:1px solid rgba(255,255,255,.22); color:rgba(255,255,255,.65);
+    font-family:'Tajawal'; font-size:13px; font-weight:500; padding:6px 16px; border-radius:20px;
+    cursor:pointer; transition:.15s; }
+  #resetBtn:hover { border-color:#4fd1c5; color:#4fd1c5; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div id="gate">
+    <div id="gateBadge" class="badge" hidden></div>
     <h1>مساعد <b>نِظام</b> الذكي</h1>
     <p>اتكلم معاه صوت بصوت زي إنك بتكلم موظف مبيعات حقيقي — يسألك، يجاوبك، ويحجزلك ديمو مجاني.</p>
+    <div id="gateErr" hidden></div>
     <button id="startBtn">🎙️ ابدأ الكلام</button>
   </div>
 
   <header>
     <div class="logo">نِظام <b>Assistant</b></div>
     <div class="sub">المساعد الذكي لمنصة نِظام HR — اتكلم معاه صوت بصوت 👇</div>
+    <div id="headBadge" class="badge" hidden></div>
   </header>
   <div id="chat"></div>
   <div class="controls">
     <button id="micBtn" title="اضغط واتكلم" disabled>🎙️</button>
     <div id="status">دوس على المايك وابدأ تتكلم</div>
+    <button id="resetBtn" title="امسح الكلام وابدأ محادثة جديدة">🔄 ابدأ من جديد</button>
   </div>
 </div>
 <script>
@@ -64,9 +79,43 @@ const chat = document.getElementById('chat');
 const micBtn = document.getElementById('micBtn');
 const status = document.getElementById('status');
 const gate = document.getElementById('gate');
+const gateBadge = document.getElementById('gateBadge');
+const gateErr = document.getElementById('gateErr');
+const headBadge = document.getElementById('headBadge');
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
 let sid = localStorage.getItem('nadeem_sid');
 if (!sid) { sid = crypto.randomUUID(); localStorage.setItem('nadeem_sid', sid); }
 const urlK = new URLSearchParams(location.search).get('k') || '';
+
+let demo = null, gateBlocked = false;
+
+// بنسأل السيرفر عن الحساب قبل ما الميتنج يبدأ — لو اللينك باظ باسم يعرف من الشاشة دي مش قدام العميل
+async function loadDemo() {
+  try {
+    const res = await fetch('/api/demo?k=' + encodeURIComponent(urlK));
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || !d.ok) {
+      gateBlocked = true;
+      gateErr.textContent = d.error || 'اللينك ده مش شغال — اطلب لينك جديد من فريق نِظام HR';
+      gateErr.hidden = false;
+      startBtn.disabled = true;
+      startBtn.textContent = '🚫 اللينك مقفول';
+      return;
+    }
+    if (d.demo && d.company) {
+      demo = d;
+      gateBadge.textContent = '🎯 ديمو خاص بـ ' + d.company;
+      gateBadge.hidden = false;
+      headBadge.textContent = 'ديمو ' + d.company;
+      headBadge.hidden = false;
+      document.title = 'ديمو ' + d.company + ' | نِظام Assistant';
+    }
+  } catch (e) {
+    // الشبكة تعبت؟ منقفلش الزرار — يمكن /api/talk يشتغل عادي
+  }
+}
+const demoReady = loadDemo();
 
 let mediaRecorder = null, chunks = [], recording = false, busy = false;
 
@@ -88,7 +137,7 @@ function thinking() {
 }
 
 const audioQueue = [];
-let playing = false;
+let playing = false, currentPlayer = null;
 function pump() {
   if (playing || !audioQueue.length) {
     if (!playing && !audioQueue.length && queueDone) setStatus('دوس على المايك وابدأ تتكلم');
@@ -97,7 +146,8 @@ function pump() {
   playing = true;
   const item = audioQueue.shift();
   const player = new Audio(URL.createObjectURL(new Blob([item.bytes], { type: item.mime })));
-  const fin = () => { playing = false; pump(); };
+  currentPlayer = player;
+  const fin = () => { playing = false; currentPlayer = null; pump(); };
   player.onended = fin;
   player.onerror = fin;
   player.play().catch(fin);
@@ -111,12 +161,34 @@ async function playWelcome() {
   } catch (e) {}
 }
 
-document.getElementById('startBtn').onclick = async () => {
+startBtn.onclick = async () => {
+  await demoReady;
+  if (gateBlocked) return;
+  // كل ديمو يبدأ من أول وجديد — من غير أي كلام من تجارب قبل كده
+  if (demo) { sid = crypto.randomUUID(); localStorage.setItem('nadeem_sid', sid); }
   gate.remove();
   micBtn.disabled = false;
   setStatus('بسمع الترحيب...');
   await playWelcome();
   setStatus('دوس على المايك وابدأ تتكلم');
+};
+
+resetBtn.onclick = async () => {
+  if (busy) { setStatus('استنى رد نِظام Assistant الأول'); return; }
+  if (currentPlayer) { currentPlayer.pause(); currentPlayer = null; }
+  audioQueue.length = 0;
+  playing = false;
+  queueDone = true;
+  try {
+    const fd = new FormData();
+    fd.append('session_id', sid);
+    fd.append('k', urlK);
+    await fetch('/api/reset', { method: 'POST', body: fd });
+  } catch (e) {}
+  sid = crypto.randomUUID();
+  localStorage.setItem('nadeem_sid', sid);
+  chat.innerHTML = '';
+  setStatus('اتمسح الكلام القديم — ابدأ من جديد');
 };
 
 async function send(blob) {
