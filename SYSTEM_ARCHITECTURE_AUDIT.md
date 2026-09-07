@@ -5,7 +5,7 @@
 |---|---|
 | **تاريخ الفحص** | 2026-09-07 |
 | **الفرع المفحوص** | `claude/hr-system-architecture-audit-th11xf` (مطابق تمامًا لـ `origin/main` عند commit `cac428f`) |
-| **نوع الفحص** | قراءة فعلية لكل ملف في الريبو (100% من الكود) + تاريخ git + التبعيات. لم يُعدَّل أو يُحذف أي ملف. |
+| **نوع الفحص** | قراءة فعلية لكل ملف في الريبو (100% من الكود) + تاريخ git + التبعيات + **تشغيل فعلي للتطبيق في بيئة معزولة** (Appendix A). لم يُعدَّل أو يُحذف أي ملف. |
 | **حجم الكود** | 9 ملفات مُتتبَّعة — `app.py` (487 سطر) + `static/index.html` (313 سطر) + ملفات تهيئة/توثيق |
 
 > **تنبيه أساسي يحكم التقرير كله:**
@@ -52,22 +52,22 @@
 
 | الفئة | التقنية | الإصدار | أين تُستخدم | الملفات | الحالة |
 |---|---|---|---|---|---|
-| **Backend framework** | FastAPI | `>=0.111` (غير مثبَّت في بيئة الفحص، الإصدار الفعلي يُحدَّد عند build) | كل الـAPI | `app.py:205` | ✅ |
-| **ASGI server** | Uvicorn `[standard]` | `>=0.30` | تشغيل التطبيق | `Dockerfile:8`, `app.py:487` | ✅ |
+| **Backend framework** | FastAPI | `>=0.111` غير مثبَّت الإصدار؛ يحلّ حاليًا إلى **0.141.1** (Starlette 1.6.0, Pydantic 2.13.5) | كل الـAPI | `app.py:205` | ✅ |
+| **ASGI server** | Uvicorn `[standard]` | `>=0.30` → يحلّ إلى **0.52.4** | تشغيل التطبيق | `Dockerfile:8`, `app.py:487` | ✅ |
 | **Programming language (backend)** | Python | 3.11 (`python:3.11-slim`) | كل الـbackend | `Dockerfile:1` | ✅ |
 | **Programming language (frontend)** | HTML5 + CSS3 + Vanilla JavaScript (ES2020) | — | صفحة واحدة | `static/index.html` | ✅ |
 | **Frontend framework** | لا يوجد (Vanilla) | — | — | — | 🔴 لا framework |
-| **HTTP client** | requests | `>=2.31` (المثبَّت محليًا 2.33.1) | استدعاء Groq/ElevenLabs/Gemini/Hakim | `app.py:213-327` | ✅ |
-| **Form parsing** | python-multipart | `>=0.0.9` | `Form`/`File` في `/api/talk`, `/api/reset` | `app.py:16,383,393` | ✅ |
-| **Env config** | python-dotenv | `>=1.0` | `load_dotenv()` | `app.py:15,20` | ✅ |
-| **TTS (default)** | edge-tts (Microsoft Edge Neural TTS) | `>=6.1` | `tts_edge` — صوت `ar-EG-SalmaNeural` | `app.py:255-261` | ✅ |
+| **HTTP client** | requests | `>=2.31` → **2.34.2** | استدعاء Groq/ElevenLabs/Gemini/Hakim | `app.py:213-327` | ✅ |
+| **Form parsing** | python-multipart | `>=0.0.9` → **0.0.32** | `Form`/`File` في `/api/talk`, `/api/reset` | `app.py:16,383,393` | ✅ |
+| **Env config** | python-dotenv | `>=1.0` → **1.2.3** | `load_dotenv()` | `app.py:15,20` | ✅ |
+| **TTS (default)** | edge-tts (Microsoft Edge Neural TTS) | `>=6.1` → **7.2.8** | `tts_edge` — صوت `ar-EG-SalmaNeural` | `app.py:255-261` | ✅ |
 | **STT** | Groq Whisper `whisper-large-v3-turbo` | API | `transcribe()` | `app.py:213-225` | ✅ |
 | **LLM** | Groq `openai/gpt-oss-120b` | API, streaming | `ask_groq_stream_tokens()` | `app.py:228-252` | ✅ |
 | **TTS (optional)** | Groq Orpheus `canopylabs/orpheus-arabic-saudi` | API | `tts_orpheus()` | `app.py:264-272` | 🟡 كود موجود، غير مفعّل افتراضيًا |
 | **TTS (optional)** | ElevenLabs `eleven_multilingual_v2` | API | `tts_elevenlabs()` | `app.py:275-287` | 🟡 كود موجود، غير مفعّل |
 | **TTS (optional)** | Google Gemini `gemini-2.5-flash-preview-tts` | API | `tts_gemini()` | `app.py:290-308` | ⚠️ **مكسور** (انظر §21) |
 | **TTS (optional)** | Hakim `hakim-flash-v1` (tryhakim.ai) | API | `tts_hakim()` | `app.py:311-327` | 🟡 كود موجود، غير مفعّل |
-| **Audio libs** | miniaudio `>=1.59`, numpy `>=2.1` | — | **غير مستوردة في أي مكان** | `requirements.txt:6-7` | ⚠️ Dead dependency |
+| **Audio libs** | miniaudio `>=1.59` → 1.71, numpy `>=2.1` → 2.4.6 | — | **غير مستوردة في أي مكان** | `requirements.txt:6-7` | ⚠️ Dead dependency |
 | **Database** | لا يوجد | — | — | — | 🔴 |
 | **ORM / Migrations** | لا يوجد | — | — | — | 🔴 |
 | **Authentication** | مفتاح مشترك/مفاتيح Demo عبر query/form param `k` | — | كل endpoints تحت `/api` | `app.py:153-163` | 🟡 (Access gate، ليس Auth حقيقي) |
@@ -567,6 +567,9 @@ sequenceDiagram
 | S16 | Dependency risk | edge-tts يعتمد على خدمة غير رسمية؛ `miniaudio`/`numpy` غير مستخدمتين لكنهما تُثبَّتان (سطح هجوم أكبر + build أبطأ) | 🟢 | `requirements.txt` |
 | S17 | Docker | يعمل كـ root (لا `USER`), ينسخ الريبو كاملًا بما فيه `.git` و`DEMO.md` (لا `.dockerignore`) | 🟢 | `Dockerfile:5` |
 | S18 | No security headers | لا CSP/HSTS/X-Frame-Options | 🟢 | — |
+| S19 | **Exposed API docs** (مُتحقَّق تشغيليًا) | `/docs` و`/openapi.json` مفتوحان بلا مفتاح (افتراضي FastAPI) — يكشفان كل الـendpoints وحقولها لأي زائر | 🟡 منخفضة-متوسطة | `app.py:205` (لا `docs_url=None`) |
+| S20 | **`active:false` لا يقفل الرابط** (مُتحقَّق تشغيليًا) | عندما `ACCESS_KEY` فارغ، مفتاح حساب معطَّل يمرّ كزائر عادي (`{"ok":true,"demo":false}`) ويستطيع استخدام `/api/talk`. `DEMO.md` يقول "active: false بيقفل اللينك فورًا" — **الوثيقة مخالفة للسلوك الفعلي** | 🟠 متوسطة | `app.py:145-146, 161-163`, `DEMO.md:46` |
+| S21 | Error stream leaks infra details (مُتحقَّق تشغيليًا) | فشل STT أعاد للمتصفح نص الاستثناء الكامل بما فيه host/port/proxy chain (`HTTPSConnectionPool(host='api.groq.com'...)`) | 🟡 | `app.py:408` |
 
 ---
 
@@ -684,6 +687,9 @@ sequenceDiagram
 | T17 | Git hygiene | 20 commit متطابقة العنوان "deploy nadeem voice agent" في يوم واحد — لا يمكن تتبع ما تغير | git log |
 | T18 | Incomplete feature | ميزة `env:DEMO_KEY_XXX` موجودة بالكود وموثقة لكن غير مستخدمة؛ المفتاح الحقيقي في الريبو | `demo_accounts.json`, `.env.example:22` |
 | T19 | TODOs | لا توجد تعليقات TODO/FIXME في الكود (تم البحث) | — |
+| T20 | Unpinned dependencies | كل التبعيات `>=` بلا lockfile → كل build يسحب أحدث إصدار (FastAPI قفز من 0.111 إلى 0.141 فعليًا). غير قابل لإعادة الإنتاج وقد ينكسر فجأة | `requirements.txt` |
+| T21 | SSE error = HTTP 200 | أخطاء STT/LLM/TTS تصل كحدث `error` داخل بث ناجح (200)؛ أي عميل/مراقبة يعتمد على HTTP status لن يرى الفشل | `app.py:404-483` |
+| T22 | Doc/behavior mismatch | `DEMO.md` يعِد أن `active:false` يقفل الرابط؛ فعليًا لا يقفله إن كان `ACCESS_KEY` فارغًا (انظر S20) | `DEMO.md:46`, `app.py:161` |
 
 ---
 
@@ -895,6 +901,7 @@ flowchart TB
 8. نصوص الاستثناءات الخام تصل للمستخدم.
 9. تبعيات ميتة (`miniaudio`, `numpy`) وتناقض `.gitignore` مع ملف wav مُتتبَّع.
 10. بيانات الأعمال (أسعار/عملاء/قوانين/منافسون) hardcoded في الكود، مع تعليمة إنكار كونه AI.
+11. (تشغيلي) `active:false` لا يقفل رابط العميل عندما `ACCESS_KEY` فارغ، بعكس ما يعِد به `DEMO.md`؛ و`/docs` مكشوف للعموم.
 
 ### 25.4 أهم 10 فرص لتطوير النظام
 1. إضافة `create_lead` tool + جدول leads + إشعار WhatsApp/Email للمالك — أعلى عائد بأقل جهد.
@@ -916,6 +923,142 @@ flowchart TB
 **المرحلة 1:** Knowledge base + RAG، حجز Demo، structured outcomes، تحليلات، تسجيل transcripts، audit log.
 **المرحلة 2:** Event bus + workflow engine (follow-ups)، أحداث الدفع، human-approval queue، صلاحيات RBAC + tenant isolation.
 **المرحلة 3 (المنصة):** وحدات HR الفعلية (Employees → Attendance/ZKTeco → Leave → Payroll/Insurance/Tax) كـ services بواجهات API واضحة، ثم فتحها كـ tools للـAgent مع صلاحيات وموافقات بشرية.
+
+---
+
+## Appendix A — Runtime Verification (تشغيل فعلي)
+
+شُغِّل التطبيق في بيئة معزولة (venv في scratchpad، `PYTHONDONTWRITEBYTECODE=1`، ملف حسابات ديمو مؤقت عبر `DEMO_ACCOUNTS_FILE`) **دون لمس ملفات المشروع** (`git status` نظيف بعد الاختبار، لا `__pycache__`). لا مفتاح Groq → كل استدعاء خارجي يفشل عمدًا، مما يُظهر مسار الخطأ.
+
+### A.1 بوابة الدخول — `ACCESS_KEY` فارغ (الإعداد الافتراضي في `.env.example`)
+
+| الطلب | النتيجة | التفسير |
+|---|---|---|
+| `GET /api/demo` بلا مفتاح | `200 {"ok":true,"demo":false}` | **مفتوح للجميع** (يؤكد S3) |
+| `?k=random` | `200 {"ok":true,"demo":false}` | أي قيمة عشوائية تمرّ |
+| `?k=ok-key` (حساب صالح) | `200 {"ok":true,"demo":true,"company":"شركة اختبار","contact":"أحمد","employees":45,...}` | تخصيص يعمل |
+| `?k=old-key` (منتهٍ) | `403 {"ok":false,"error":"⏳ لينك الديمو ده انتهت صلاحيته..."}` | الانتهاء يعمل حتى مع بوابة مفتوحة |
+| `?k=off-key` (`active:false`) | `200 {"ok":true,"demo":false}` | **الحساب المعطَّل لا يُمنع** — يسقط إلى الوضع المفتوح (S20) |
+| `?k=secret-from-env` (`"key":"env:DEMO_KEY_TEST"`) | `200 {"ok":true,"demo":true,"company":"من البيئة"}` | آلية `env:` تعمل |
+| `POST /api/reset` بلا مفتاح | `200 {"ok":true}` | أي شخص يمسح أي جلسة |
+| `POST /api/talk` ملف < 1000 بايت | `400 {"error":"التسجيل قصير جدًا"}` | التحقق الوحيد من المدخلات يعمل |
+| `POST /api/talk` ملف 3KB بلا مفتاح Groq | `200` + `event: error` بنص: `مشكلة في السمع: HTTPSConnectionPool(host='api.groq.com', port=443): Max retries exceeded ... ProxyError(...)` | فشل STT يصل كـSSE داخل 200 (T21) ويكشف تفاصيل البنية (S21) |
+
+### A.2 بوابة الدخول — `ACCESS_KEY=master`
+
+| الطلب | النتيجة |
+|---|---|
+| `GET /api/demo` بلا مفتاح | `403 🔒 كود الدعوة غير صحيح` |
+| `?k=wrong` | `403` |
+| `?k=master` | `200 {"ok":true,"demo":false}` |
+| `?k=ok-key` | `200 demo:true` (مفاتيح الديمو تعمل بجانب المفتاح الرئيسي) |
+| `?k=old-key` | `403 ⏳ منتهٍ` |
+| `POST /api/reset` بـ `k=wrong` | `403` |
+| `POST /api/talk` بـ `k=wrong` | `403` (يُرفض قبل قراءة الملف أو استدعاء أي API مدفوع) |
+
+### A.3 سلوك ملف الحسابات
+
+| الاختبار | النتيجة |
+|---|---|
+| إضافة حساب جديد للملف أثناء التشغيل | التُقط في الطلب التالي بلا restart (`demo:true, company:"جديدة"`) — hot reload ✅ |
+| إتلاف الملف (`{broken`) | الطلب التالي ما زال يرد بآخر نسخة سليمة + سطر في stdout: `[ديمو] مشكلة في قراءة ...: Expecting property name...` — fallback ✅ |
+
+### A.4 مسارات أخرى
+
+| الطلب | النتيجة | ملاحظة |
+|---|---|---|
+| `GET /api/talk` | `405 Method Not Allowed` | افتراضي FastAPI |
+| `GET /health` | `404` | لا health endpoint |
+| `GET /static/../app.py` | `404` | Starlette يمنع path traversal ✅ |
+| `GET /docs` | `200` | **Swagger UI مفتوح بلا مفتاح** (S19) |
+| `GET /openapi.json` | `200` | schema كامل مكشوف (S19) |
+
+### A.5 إصدارات التبعيات المحلولة فعليًا (pip install على requirements.txt بتاريخ الفحص)
+
+| الحزمة | القيد | المحلول |
+|---|---|---|
+| fastapi | `>=0.111` | 0.141.1 |
+| starlette | (transitive) | 1.6.0 |
+| pydantic | (transitive) | 2.13.5 |
+| uvicorn | `>=0.30` | 0.52.4 |
+| python-multipart | `>=0.0.9` | 0.0.32 |
+| requests | `>=2.31` | 2.34.2 |
+| edge-tts | `>=6.1` | 7.2.8 |
+| miniaudio | `>=1.59` | 1.71 (غير مستخدمة) |
+| numpy | `>=2.1` | 2.4.6 (غير مستخدمة) |
+| python-dotenv | `>=1.0` | 1.2.3 |
+
+كل الحزم تثبّتت بنجاح (بما فيها miniaudio التي تحتاج wheel مُترجم). لا lockfile → النتيجة قد تختلف في build لاحق (T20).
+
+---
+
+## Appendix B — مرجع متغيرات البيئة الكامل (من الكود لا من `.env.example`)
+
+| المتغير | الافتراضي في الكود | موثّق في `.env.example`؟ | الاستخدام | السطر |
+|---|---|---|---|---|
+| `GROQ_API_KEY` | `None` | ✅ | STT + LLM + Orpheus TTS. بدونه كل طلب `/api/talk` يفشل بعد STT | 22 |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | ✅ | نموذج المحادثة | 23 |
+| `WHISPER_MODEL` | `whisper-large-v3-turbo` | ✅ | نموذج التفريغ | 24 |
+| `TTS_ENGINE` | `edge` | ✅ | `edge` / `groq_orpheus` / `elevenlabs` / `gemini` / `hakim`؛ أي قيمة أخرى = edge | 26, 334-342 |
+| `EDGE_VOICE` | `ar-EG-SalmaNeural` | ✅ | صوت Edge | 27 |
+| `ORPHEUS_MODEL` | `canopylabs/orpheus-arabic-saudi` | ❌ | نموذج Orpheus على Groq | 28 |
+| `ELEVENLABS_API_KEY` | `""` | ✅ (معلَّق) | | 29 |
+| `ELEVENLABS_VOICE_ID` | `pNInz6obpgDQGcFmaJgB` | ✅ (معلَّق) | voice id عام | 30 |
+| `GEMINI_API_KEY` | `""` | ✅ (معلَّق) | | 31 |
+| `GEMINI_TTS_MODEL` | `gemini-2.5-flash-preview-tts` | ❌ | | 32 |
+| `GEMINI_VOICE` | `Kore` | ❌ | | 33 |
+| `HAKIM_API_KEY` | `""` | ✅ (معلَّق) | | 34 |
+| `HAKIM_MODEL` | `hakim-flash-v1` | ❌ | | 35 |
+| `HAKIM_VOICE` | `yusuf-egyptian` | ❌ | | 36 |
+| `HAKIM_SPEED` | `0.9` (float) | ❌ | قيمة غير رقمية = crash عند الاستيراد (`float()` بلا try) | 37 |
+| `HAKIM_FORMAT` | `wav` | ❌ | `wav` أو أي شيء آخر = mp3 | 38, 326 |
+| `ACCESS_KEY` | `""` | ✅ | فارغ = مفتوح للجميع | 39 |
+| `DEMO_ACCOUNTS_FILE` | `demo_accounts.json` | ✅ | مسار نسبي لـ cwd | 40 |
+| `DEMO_KEY_*` | — | ✅ | أي اسم يُشار إليه بـ `env:` في JSON | 124 |
+| `PORT` | `7860` | ❌ (في Dockerfile فقط) | يُقرأ فقط عند `python app.py` مباشرة؛ الـDockerfile يمرر `--port 7860` صراحة فلا أثر للمتغير هناك | 487, `Dockerfile:6-8` |
+
+---
+
+## Appendix C — خريطة `app.py` سطرًا بسطر
+
+| الأسطر | المحتوى |
+|---|---|
+| 1-18 | imports (stdlib + edge_tts, requests, uvicorn, dotenv, fastapi) |
+| 20-40 | تحميل `.env` وقراءة 19 متغير بيئة إلى ثوابت module-level (تُقرأ مرة واحدة عند الاستيراد) |
+| 42-90 | `SYSTEM_PROMPT` (هوية، أسلوب، معلومات المنتج، أسعار، اعتراضات، 6 قواعد، شروط التصعيد، الهدف) |
+| 92-93 | رسائل الخطأ الثابتة `BAD_KEY_MSG`, `EXPIRED_MSG` |
+| 95-117 | cache حسابات الديمو + `load_demo_accounts()` (mtime-based reload، fallback عند JSON تالف) |
+| 120-150 | `account_key`, `account_expired`, `resolve_account` |
+| 153-163 | `check_access` — منطق البوابة |
+| 166-200 | `build_demo_context`, `build_system_prompt` |
+| 203-206 | `sessions = {}`، إنشاء `FastAPI`، mount `/static` |
+| 209-210 | `sse()` |
+| 213-225 | `transcribe()` — Groq Whisper |
+| 228-252 | `ask_groq_stream_tokens()` — generator متزامن يبث tokens |
+| 255-327 | خمس دوال TTS |
+| 330-346 | `tts_one()` — اختيار المحرك + retry |
+| 349-356 | `pcm_to_wav()` — غير مستخدمة |
+| 359-361 | `GET /` |
+| 364-379 | `GET /api/demo` |
+| 382-389 | `POST /api/reset` |
+| 392-483 | `POST /api/talk` — قراءة الملف، STT، بث LLM، تقسيم جُمل، TTS متوازٍ، بث SSE، طباعة التوقيت |
+| 486-487 | تشغيل مباشر بـ uvicorn |
+
+---
+
+## Appendix D — نموذج التكلفة/الزمن لكل دور محادثة (مستنتج من الكود)
+
+لكل ضغطة مايك واحدة:
+
+| الخطوة | عدد الاستدعاءات الخارجية | متسلسل/متوازٍ | ملاحظة |
+|---|---|---|---|
+| STT | 1 (Groq Whisper) | متسلسل — يحجب كل ما بعده | `app.py:406` |
+| LLM | 1 (Groq chat, stream) | متسلسل، لكن الجُمل تخرج تدريجيًا | `max_tokens=250` يحد الرد بـ~2-4 جمل |
+| TTS | N = عدد الجُمل (عادة 2-5) | متوازٍ (`create_task` لكل جملة) مع إرسال بالترتيب | كل جملة حتى 3 محاولات عند الفشل |
+| الإرسال | base64 داخل SSE (+33% حجم) | — | الصوت كاملًا في الذاكرة قبل الإرسال لكل جملة |
+
+الزمن حتى أول صوت ≈ STT + وقت أول جملة من LLM + TTS لتلك الجملة. الكود يطبع هذا القياس في stdout (`app.py:478`) ولا يخزنه.
+التكلفة المدفوعة لكل دور: 1 STT + 1 LLM (+ N TTS إن كان المحرك مدفوعًا؛ Edge مجاني). بلا rate limiting، زائر واحد بسكربت يمكنه توليد آلاف الأدوار.
 
 ---
 
@@ -959,6 +1102,10 @@ flowchart TB
 | E34 | لا مفاتيح API مضمّنة في الكود | مسح regex على كل الملفات | — | — | — |
 | E35 | رسائل الأخطاء تحمل نص الاستثناء | `app.py:408, 447, 462` | `event_stream()` | — | `POST /api/talk` |
 | E36 | لا حد لحجم الرفع | `app.py:400` | `await file.read()` | — | `POST /api/talk` |
+| E37 | (تشغيلي) البوابة مفتوحة عند فراغ `ACCESS_KEY`، وحساب `active:false` يمرّ كزائر | Appendix A.1 | `check_access()` | — | `GET /api/demo`, `POST /api/talk` |
+| E38 | (تشغيلي) `/docs` و`/openapi.json` مكشوفان | Appendix A.4 | FastAPI defaults، `app.py:205` | — | `GET /docs` |
+| E39 | (تشغيلي) hot reload وfallback لملف الحسابات يعملان | Appendix A.3 | `load_demo_accounts()` | — | `GET /api/demo` |
+| E40 | (تشغيلي) الإصدارات المحلولة للتبعيات غير مثبتة | Appendix A.5 | `requirements.txt` | — | — |
 
 ---
 *نهاية التقرير. لم يُعدَّل أو يُحذف أي ملف من ملفات المشروع؛ الملف الوحيد المُضاف هو هذا التقرير.*
