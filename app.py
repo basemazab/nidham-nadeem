@@ -6,6 +6,7 @@ import os
 import re
 import time
 import wave
+from collections import deque
 from datetime import date
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import edge_tts
 import requests
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -38,6 +39,15 @@ HAKIM_SPEED = float(os.getenv("HAKIM_SPEED", "0.9"))
 HAKIM_FORMAT = os.getenv("HAKIM_FORMAT", "wav")
 ACCESS_KEY = os.getenv("ACCESS_KEY", "")
 DEMO_ACCOUNTS_FILE = os.getenv("DEMO_ACCOUNTS_FILE", "demo_accounts.json")
+
+# حماية من الإغراق (rate limiting) — 0 في أي واحد = الحد ده مقفول
+TALK_PER_IP_5MIN = int(os.getenv("TALK_PER_IP_5MIN", "40"))
+TALK_PER_IP_HOUR = int(os.getenv("TALK_PER_IP_HOUR", "150"))
+TALK_GLOBAL_HOUR = int(os.getenv("TALK_GLOBAL_HOUR", "600"))
+BAD_KEY_PER_IP_15MIN = int(os.getenv("BAD_KEY_PER_IP_15MIN", "10"))
+MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "10"))
+MAX_SESSIONS = 2000
+MAX_HISTORY = 20
 
 SYSTEM_PROMPT = """انت "نِظام Assistant" — المساعد الصوتي الذكي الرسمي لشركة Nidham (نِظام)، وهي SaaS مصري متخصص في إدارة الموارد البشرية والمرتبات والـ AI للشركات المصرية الصغيرة والمتوسطة (10-200 موظف).
 
@@ -91,6 +101,10 @@ SYSTEM_PROMPT = """انت "نِظام Assistant" — المساعد الصوتي
 
 BAD_KEY_MSG = "🔒 كود الدعوة غير صحيح — اطلب اللينك الكامل من فريق نِظام HR"
 EXPIRED_MSG = "⏳ لينك الديمو ده انتهت صلاحيته — اطلب لينك جديد من فريق نِظام HR"
+TOO_FAST_MSG = "⏳ طلبات كتير ورا بعض — استنى شوية وجرب تاني"
+BUSY_MSG = "⏳ المساعد عليه ضغط كبير دلوقتي — جرب تاني بعد شوية"
+BAD_KEY_LOCK_MSG = "🔒 محاولات كتير بكود غلط — استنى ربع ساعة وجرب تاني"
+TOO_BIG_MSG = "التسجيل كبير جدًا — قسّم كلامك على أكتر من مرة"
 
 _demo_cache = {"mtime": None, "accounts": []}
 
@@ -200,9 +214,111 @@ def build_system_prompt(acc):
     return SYSTEM_PROMPT + build_demo_context(acc)
 
 
+class RateLimiter:
+    """عدّاد طلبات في الذاكرة (نافذة زمنية متحركة) — كفاية لسيرفر واحد زي الـ Space."""
+
+    def __init__(self, limit, window):
+        self.limit = limit
+        self.window = window
+        self.hits = {}
+
+    def retry_after(self, key):
+        """كام ثانية لازم يستنى؟ صفر = مسموح."""
+        if self.limit <= 0:
+            return 0
+        now = time.monotonic()
+        q = self.hits.get(key)
+        if not q:
+            return 0
+        while q and now - q[0] >= self.window:
+            q.popleft()
+        if len(q) < self.limit:
+            return 0
+        return int(q[0] + self.window - now) + 1
+
+    def add(self, key):
+        if self.limit <= 0:
+            return
+        now = time.monotonic()
+        if len(self.hits) > 10000:
+            # ننضّف العناوين اللي مدتها خلصت علشان الذاكرة متكبرش
+            for old in [k for k, q in self.hits.items() if not q or now - q[-1] >= self.window]:
+                del self.hits[old]
+        self.hits.setdefault(key, deque()).append(now)
+
+
+talk_ip_5min = RateLimiter(TALK_PER_IP_5MIN, 300)
+talk_ip_hour = RateLimiter(TALK_PER_IP_HOUR, 3600)
+talk_global = RateLimiter(TALK_GLOBAL_HOUR, 3600)
+bad_keys = RateLimiter(BAD_KEY_PER_IP_15MIN, 900)
+
+
+def client_ip(request):
+    """عنوان الزائر. ورا بروكسي (زي Hugging Face) العنوان الحقيقي بييجي في X-Forwarded-For.
+    الهيدر ده ممكن يتزوّر — علشان كده فيه كمان TALK_GLOBAL_HOUR كسقف للموقع كله ميتأثرش بالتزوير."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()[:64]
+    return request.client.host if request.client else "unknown"
+
+
+def too_many(msg, wait):
+    return JSONResponse(
+        {"ok": False, "error": msg}, status_code=429, headers={"Retry-After": str(wait)}
+    )
+
+
+def guarded_access(request, k, probe=False):
+    """check_access + قفل مؤقت للـ IP اللي بيخمّن أكواد العملاء.
+    probe=True لـ /api/demo لأنه بيكشف اسم الشركة: أي كود مش معروف هناك بيتحسب محاولة غلط.
+    يرجّع (رد الرفض أو None, حساب الديمو أو None)."""
+    ip = client_ip(request)
+    wait = bad_keys.retry_after(ip)
+    if wait:
+        return too_many(BAD_KEY_LOCK_MSG, wait), None
+    k = (k or "").strip()
+    ok, acc, err = check_access(k)
+    if err == BAD_KEY_MSG or (probe and ok and not acc and k and k != ACCESS_KEY):
+        bad_keys.add(ip)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err}, status_code=403), None
+    return None, acc
+
+
+class LimitUploadSize:
+    """بيرفض أي POST أكبر من MAX_UPLOAD_MB قبل ما السيرفر يستقبله، علشان محدش يملا الديسك بملف ضخم."""
+
+    def __init__(self, app, max_bytes):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST":
+            length = dict(scope["headers"]).get(b"content-length", b"")
+            if not length.isdigit() or int(length) > self.max_bytes:
+                status = 413 if length.isdigit() else 411
+                resp = JSONResponse({"ok": False, "error": TOO_BIG_MSG}, status_code=status)
+                await resp(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 sessions = {}
 
+
+def get_history(session_id):
+    """تاريخ المحادثة. الجلسات اللي بقالها كتير محدش استخدمها بتتشال لما العدد يعدّي MAX_SESSIONS."""
+    history = sessions.pop(session_id, None)
+    if history is None:
+        history = []
+        while len(sessions) >= MAX_SESSIONS:
+            sessions.pop(next(iter(sessions)))
+    sessions[session_id] = history
+    return history
+
+
 app = FastAPI(title="Nidham Assistant Voice")
+app.add_middleware(LimitUploadSize, max_bytes=int(MAX_UPLOAD_MB * 1024 * 1024))
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -362,11 +478,11 @@ async def home():
 
 
 @app.get("/api/demo")
-async def demo_info(k: str = ""):
+async def demo_info(request: Request, k: str = ""):
     """الواجهة بتسأل عن الحساب أول ما تفتح — علشان باسم يعرف قبل الميتنج إن اللينك شغال."""
-    ok, acc, err = check_access(k)
-    if not ok:
-        return JSONResponse({"ok": False, "error": err}, status_code=403)
+    denied, acc = guarded_access(request, k, probe=True)
+    if denied:
+        return denied
     if not acc:
         return {"ok": True, "demo": False}
     return {
@@ -380,26 +496,46 @@ async def demo_info(k: str = ""):
 
 
 @app.post("/api/reset")
-async def reset_session(session_id: str = Form(...), k: str = Form("")):
+async def reset_session(request: Request, session_id: str = Form(...), k: str = Form("")):
     """يمسح تاريخ المحادثة — علشان الديمو يبدأ نضيف قدام العميل."""
-    ok, _, err = check_access(k)
-    if not ok:
-        return JSONResponse({"error": err}, status_code=403)
+    denied, _ = guarded_access(request, k)
+    if denied:
+        return denied
     sessions.pop(session_id, None)
     return {"ok": True}
 
 
 @app.post("/api/talk")
-async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str = Form("")):
-    allowed, account, err = check_access(k)
-    if not allowed:
-        return JSONResponse({"error": err}, status_code=403)
+async def talk(
+    request: Request,
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    k: str = Form(""),
+):
+    denied, account = guarded_access(request, k)
+    if denied:
+        return denied
+    if not session_id or len(session_id) > 100:
+        return JSONResponse({"error": "جلسة غير صالحة — اعمل refresh للصفحة"}, status_code=400)
     system_prompt = build_system_prompt(account)
 
     t0 = time.time()
     audio = await file.read()
     if len(audio) < 1000:
         return JSONResponse({"error": "التسجيل قصير جدًا"}, status_code=400)
+
+    # كل رد بيكلّف نداء مدفوع (سمع + تفكير + صوت) — فبنحدد العدد لكل زائر وللموقع كله
+    ip = client_ip(request)
+    wait = max(talk_ip_5min.retry_after(ip), talk_ip_hour.retry_after(ip))
+    if wait:
+        return too_many(TOO_FAST_MSG, wait)
+    wait = talk_global.retry_after("all")
+    if wait:
+        print(f"[حماية] الموقع وصل لسقف TALK_GLOBAL_HOUR={TALK_GLOBAL_HOUR}")
+        return too_many(BUSY_MSG, wait)
+    talk_ip_5min.add(ip)
+    talk_ip_hour.add(ip)
+    talk_global.add("all")
 
     async def event_stream():
         try:
@@ -412,7 +548,7 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
             return
         yield sse("transcript", {"text": user_text})
 
-        history = sessions.setdefault(session_id, [])
+        history = get_history(session_id)
         history.append({"role": "user", "content": user_text})
 
         tts_tasks = []
@@ -453,6 +589,7 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
             return
 
         history.append({"role": "assistant", "content": full_reply})
+        del history[:-MAX_HISTORY]
 
         first_at = None
         for i, task in enumerate(tts_tasks):
@@ -476,7 +613,7 @@ async def talk(file: UploadFile = File(...), session_id: str = Form(...), k: str
 
         total = time.time() - t0
         print(
-            f"[توقيت] أول صوت={first_at:.1f}s | رد كامل={total:.1f}s | جمل={len(tts_tasks)}"
+            f"[توقيت] أول صوت={first_at:.1f}s | رد كامل={total:.1f}s | جمل={len(tts_tasks)} | ip={ip}"
         )
         yield sse("done", {})
 

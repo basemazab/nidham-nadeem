@@ -1,0 +1,7 @@
+# علشان مفاتيح .env متتنسخش جوه الـ Docker image لو اتعمل build من جهازك
+.env
+.env.*
+!.env.example
+.git
+__pycache__/
+loadtest/
